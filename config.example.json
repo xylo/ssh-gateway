@@ -1,0 +1,8 @@
+{
+  "host": "server.example.org",
+  "port": 22,
+  "user": "claude-ops",
+  "keyFile": "/home/you/.ssh/id_ed25519_gateway",
+  "ideaCommand": "idea",
+  "defaultTimeoutSeconds": 120
+}

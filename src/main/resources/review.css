@@ -1,0 +1,7 @@
+.mono, .output-area { -fx-font-family: "Monospaced"; -fx-font-size: 13px; }
+.heading { -fx-font-size: 15px; -fx-font-weight: bold; }
+.warning { -fx-text-fill: #b00020; -fx-font-weight: bold; }
+.hint { -fx-text-fill: #555555; }
+.replace-match  { -rtfx-background-color: #ffe066; }
+.search-match   { -rtfx-background-color: #9ad7ff; }
+.search-current { -rtfx-background-color: #ff9f43; }
