@@ -14,18 +14,19 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record GatewayConfig(
-    String host,
-    int port,
-    String user,
-    String keyFile,
-    String knownHostsFile,
-    List<String> denyPaths,
-    List<String> extraRiskPatterns,
-    List<String> blockedCommandPatterns,
-    String ideaCommand,
-    int defaultTimeoutSeconds,
-    long maxOutputBytes,
-    long maxFileBytes) {
+        String host,
+        int port,
+        String user,
+        String keyFile,
+        String knownHostsFile,
+        List<String> denyPaths,
+        List<String> extraRiskPatterns,
+        List<String> blockedCommandPatterns,
+        String ideaCommand,
+        int defaultTimeoutSeconds,
+        long maxOutputBytes,
+        long maxFileBytes,
+        int bridgePort) {
 
     public static final List<String> DEFAULT_DENY_PATHS = List.of(
             "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.kdbx",
@@ -45,6 +46,7 @@ public record GatewayConfig(
         if (defaultTimeoutSeconds <= 0) defaultTimeoutSeconds = 120;
         if (maxOutputBytes <= 0) maxOutputBytes = 1_000_000;
         if (maxFileBytes <= 0) maxFileBytes = 512 * 1024;
+        if (bridgePort <= 0) bridgePort = 51823;
     }
 
     public static Path homeDir() {

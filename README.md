@@ -1,49 +1,107 @@
-# SSH Gateway (MCP) for Claude Code
+# SSH Gateway (MCP) for Claude Code / Claude Desktop
 
-A local MCP server (stdio) allowing Claude to manage a remote server – **with human-in-the-loop review**:
+A local gateway that lets Claude manage a server – **you sit in the middle**:
 
-- Every command is presented to you: **Execute**, **Execute with review** (output is held back and reviewed by you), or **Reject** (with a reason sent back to Claude)
-- Output and file contents appear in an editor with **Replace** (live highlighting of all matches, optional RegEx), **Always replace** (rule is saved and applied automatically in the future), **Search** (Ctrl+F, F3), and free text editing
-- File modifications (`edit_file`, `write_file`) open `idea diff` alongside an **Accept / Reject** dialog (plus text diff fallback)
-- Inquiries: Claude asks in chat or via the `ask_user` tool (dialog)
+- every command is shown to you first: **Run**, **Run and hold output** (output is withheld until you review it) or **Reject** (with a reason sent back to Claude)
+- output and file contents open in an editor with **Replace** (live highlighting of every match, optionally RegEx), **Always replace** (saves the rule and applies it automatically from then on), **Search** (Ctrl+F, F3) and free-form editing
+- file changes (`edit_file`, `write_file`) open `idea diff` plus an **Accept / Reject** dialog (with a text diff as a fallback)
+- follow-up questions: Claude can ask in chat or via the `ask_user` tool (dialog)
 
-Java 25, Maven, JavaFX + RichTextFX, sshj. No MCP SDK: the protocol (initialize, tools/list, tools/call, ping, cancel) is implemented natively.
+Java 25, Maven, JavaFX + RichTextFX, sshj.
 
-## Build and Run
+## Architecture: two modes in one jar
+
+On Windows (and partly on other systems too), child processes started by Claude Desktop don't get access to the
+interactive desktop session – a JavaFX process started via stdio then can't show a window, without any visible
+error. That's why the gateway runs as **two processes**:
+
+| | UI application | Bridge |
+|---|---|---|
+| Started by | **you**, e.g. double-click or shortcut | Claude Desktop, via `claude_desktop_config.json` |
+| Command | `java -jar ssh-gateway.jar` | `java -jar ssh-gateway.jar --bridge` |
+| Contains | JavaFX, SSH connection, all approval dialogs | only stdio ↔ local socket byte forwarding |
+| Runs in | your normal desktop session → dialogs appear | anywhere, doesn't need desktop access |
+
+The UI application listens on `127.0.0.1:<bridgePort>` (default `51823`) and, on startup, writes a random token to
+`~/.ssh-gateway/bridge.token`. The bridge reads that token, connects, and from then on only forwards bytes – it
+doesn't understand MCP itself. Benefit: if you restart Claude Desktop, a new bridge simply reconnects; the UI
+application (and the SSH connection) doesn't need to be restarted for that.
+
+**Important:** the UI application must be running *before* you use it from Claude, and must keep running for the
+whole session.
+
+## Building and starting
 
 ```
 mvn package
-java -jar target/ssh-gateway.jar      # normally started by Claude Code, not manually
 ```
 
-The jar bundles the JavaFX native libraries of the build operating system – build on the target machine where it will run.
+The jar contains the JavaFX natives of the build OS – build it on the machine it will run on.
+
+**1. Start the UI application** (stays open, shows status and later the approval dialogs):
+```
+java -jar target/ssh-gateway.jar
+```
+Expected output: `ssh-gateway UI bereit für ... / Wartet auf Brücken-Verbindungen auf 127.0.0.1:51823 ...`
+
+**2. Connect Claude Desktop** – see below.
 
 ## Configuration
 
-`~/.ssh-gateway/config.json` (custom path: `SSHGW_HOME` environment variable), template: `config.example.json`.
+`~/.ssh-gateway/config.json` (alternative location: environment variable `SSHGW_HOME`), template: `config.example.json`.
 
-| Field | Description |
+| Field | Meaning |
 |---|---|
-| `host`, `port`, `user` | Target (required: host, user) |
-| `keyFile` | Private key file; if omitted: default key in `~/.ssh` |
-| `knownHostsFile` | Default: `~/.ssh/known_hosts` (host must already be present → connect once via `ssh`) |
-| `ideaCommand` | Default: `idea`; on Windows e.g. `idea64.exe`/`idea.bat`; empty = disabled |
-| `denyPaths` | Overrides the default deny list (`.env`, `*.pem`, `.ssh/**`, `/etc/shadow` …) |
-| `extraRiskPatterns` | Additional regex patterns to flag commands as suspicious in the dialog |
-| `blockedCommandPatterns` | Regex patterns; matching commands are rejected without showing a dialog |
-| `defaultTimeoutSeconds`, `maxOutputBytes`, `maxFileBytes` | Limits (120 s / 1 MB / 512 KB) |
+| `host`, `port`, `user` | target (required: host, user) |
+| `keyFile` | private key; if omitted: default key under `~/.ssh` |
+| `knownHostsFile` | default: `~/.ssh/known_hosts` (host must already be listed there → connect once via `ssh` first) |
+| `ideaCommand` | default `idea`; on Windows e.g. `idea64.exe`/`idea.bat`; empty = disabled |
+| `denyPaths` | replaces the default deny list (`.env`, `*.pem`, `.ssh/**`, `/etc/shadow` …) |
+| `extraRiskPatterns` | additional regexes that flag commands as suspicious in the dialog |
+| `blockedCommandPatterns` | regexes; matching commands are rejected without a dialog |
+| `defaultTimeoutSeconds`, `maxOutputBytes`, `maxFileBytes` | limits (120 s / 1 MB / 512 KB) |
+| `bridgePort` | local port between UI and bridge (default `51823`, `127.0.0.1` only) |
 
-Passwords should not be stored in the file: use `SSHGW_PASSWORD` or `SSHGW_KEY_PASSPHRASE` as environment variables instead.
+Passwords don't belong in this file: use the `SSHGW_PASSWORD` or `SSHGW_KEY_PASSPHRASE` environment variables instead.
 
-Additional files in `~/.ssh-gateway/`: `redactions.json` (redaction rules), `audit.log` (actions and decisions, without output content), `backups/` (original files prior to any modification).
+Other files under `~/.ssh-gateway/`: `redactions.json` (replacement rules), `audit.log` (actions and decisions,
+without output content), `backups/` (originals saved before every file change), `bridge.token` (the bridge's access
+token – don't share it).
 
-## Integrating into Claude Code
+## Connecting Claude Desktop
+
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows) or the equivalent on macOS/Linux:
+
+```json
+{
+  "mcpServers": {
+    "ssh-gateway": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "C:\\Users\\you\\path\\to\\ssh-gateway.jar",
+        "--bridge"
+      ]
+    }
+  }
+}
+```
+
+If Claude Desktop can't find `java` on the PATH, use the full path to `java.exe` instead (`where java` in a console
+shows it).
+
+After saving, **fully** quit and restart Claude Desktop (not just close the window). Prerequisite: the UI application
+is already running (see above).
+
+## Connecting Claude Code
 
 ```
-claude mcp add ssh-gateway --scope user -- java -jar /full/path/to/ssh-gateway.jar
+claude mcp add ssh-gateway --scope user -- java -jar /full/path/to/ssh-gateway.jar --bridge
 ```
 
-To prevent Claude from bypassing the gateway, configure the project's `.claude/settings.json`:
+Here too, the UI application must already be running separately.
+
+To stop Claude from going around the gateway, add this to the project's `.claude/settings.json`:
 
 ```json
 {
@@ -52,19 +110,29 @@ To prevent Claude from bypassing the gateway, configure the project's `.claude/s
 }
 ```
 
-`MCP_TOOL_TIMEOUT` (milliseconds) prevents tool calls from timing out while you are reviewing. Check this value against the current Claude Code documentation.
+`MCP_TOOL_TIMEOUT` (milliseconds) prevents a tool call from timing out while you're still reviewing it. Check this
+value against the current Claude Code docs.
 
-## Detailed Behavior
+## Behavior in detail
 
-- **Execute** still applies saved redaction rules to the output. If a rule cannot be evaluated (invalid/timeout), the review dialog opens automatically.
+- **Run** still applies the saved rules to the output. If a rule can't be evaluated (invalid regex/timeout), the
+  review dialog opens automatically.
 - `read_file` and `list_dir` always go through the review dialog.
-- The placeholder `*** SENSIBLE INFORMATION ***` is rejected in `edit_file`/`write_file` to prevent Claude from writing it into real files.
-- Before writing, the gateway verifies that the file has not changed on the server since it was read.
-- If Claude Code cancels a tool call, any open dialog is closed automatically.
-- Multiple concurrent calls are presented as sequential dialogs.
+- The placeholder `*** SENSIBLE INFORMATION ***` is rejected in `edit_file`/`write_file`, so Claude can't write it
+  into real files.
+- Before writing, the gateway checks whether the file has changed on the server since it was read.
+- If Claude Code/Desktop cancels a call, the open dialog closes.
+- Multiple concurrent calls are shown one after another as dialogs.
+- **If the UI application crashes or restarts**, the currently connected bridge loses its connection and exits.
+  Claude Desktop/Code then needs to be reconnected (usually by restarting it) so a new bridge starts.
 
 ## Limitations
 
-- Risk flagging and regex redaction are safety aids, not security boundaries. The actual security foundation is a restricted server user account (non-root, sudo whitelist).
-- Everything approved for Claude is sent to the Anthropic API.
-- Symlinks to denied paths are resolved and blocked; commands (`run_command`) can only be covered by path hints in the dialog.
+- The risk flagging and the regex-based redaction are aids, not a security boundary. The actual safeguard is a
+  restricted server user (no root, sudo allow-list).
+- Anything you approve for Claude is sent to the Anthropic API.
+- Symlinks pointing to blocked paths are resolved and blocked; for commands (`run_command`), the deny list can only
+  flag a possible match in the dialog, not enforce it.
+- The local port is only reachable via `127.0.0.1`. On a multi-user machine, other locally logged-in users could
+  theoretically try to connect; the token prevents that, as long as `bridge.token` isn't readable by other accounts
+  (enforced via file permissions on Linux/macOS; on Windows, the default protection of the user profile applies).

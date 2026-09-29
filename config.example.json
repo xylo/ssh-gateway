@@ -4,5 +4,6 @@
   "user": "claude-ops",
   "keyFile": "/home/you/.ssh/id_ed25519_gateway",
   "ideaCommand": "idea",
-  "defaultTimeoutSeconds": 120
+  "defaultTimeoutSeconds": 120,
+  "bridgePort": 51823
 }
