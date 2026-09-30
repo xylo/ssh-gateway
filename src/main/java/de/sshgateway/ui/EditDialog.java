@@ -17,40 +17,41 @@ import javafx.stage.Stage;
 import java.util.concurrent.CompletableFuture;
 
 final class EditDialog {
-    private EditDialog() {}
+	private EditDialog() {
+	}
 
-    static Stage create(EditRequest req, String unifiedDiff, String ideaStatus, Runnable reopenIdea,
-                        CompletableFuture<EditDecision> future) {
-        Label head = new Label(req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file");
-        head.getStyleClass().add("heading");
-        Label path = new Label(req.path());
-        path.getStyleClass().add("mono");
-        Label status = new Label(ideaStatus);
-        status.setWrapText(true);
-        status.getStyleClass().add("hint");
+	static Stage create(EditRequest req, String unifiedDiff, String ideaStatus, Runnable reopenIdea,
+											CompletableFuture<EditDecision> future) {
+		Label head = new Label(req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file");
+		head.getStyleClass().add("heading");
+		Label path = new Label(req.path());
+		path.getStyleClass().add("mono");
+		Label status = new Label(ideaStatus);
+		status.setWrapText(true);
+		status.getStyleClass().add("hint");
 
-        TextArea diff = new TextArea(unifiedDiff);
-        diff.setEditable(false);
-        diff.getStyleClass().add("mono");
-        VBox.setVgrow(diff, Priority.ALWAYS);
+		TextArea diff = new TextArea(unifiedDiff);
+		diff.setEditable(false);
+		diff.getStyleClass().add("mono");
+		VBox.setVgrow(diff, Priority.ALWAYS);
 
-        TextField reason = new TextField();
-        reason.setPromptText("Reason for rejection (optional – will be passed to Claude)");
+		TextField reason = new TextField();
+		reason.setPromptText("Reason for rejection (optional – will be passed to Claude)");
 
-        Button reopen = new Button("Re-open diff in IntelliJ");
-        reopen.setOnAction(e -> reopenIdea.run());
-        Button reject = new Button("Reject");
-        Button accept = new Button("Accept");
-        FxUtil.finishWith(reject, future, () -> new EditDecision(false, reason.getText()));
-        FxUtil.finishWith(accept, future, () -> new EditDecision(true, null));
+		Button reopen = new Button("Re-open diff in IntelliJ");
+		reopen.setOnAction(e -> reopenIdea.run());
+		Button reject = new Button("Reject");
+		Button accept = new Button("Accept");
+		FxUtil.finishWith(reject, future, () -> new EditDecision(false, reason.getText()));
+		FxUtil.finishWith(accept, future, () -> new EditDecision(true, null));
 
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox buttons = new HBox(8, reopen, spacer, reject, accept);
-        buttons.setAlignment(Pos.CENTER_RIGHT);
+		Region spacer = new Region();
+		HBox.setHgrow(spacer, Priority.ALWAYS);
+		HBox buttons = new HBox(8, reopen, spacer, reject, accept);
+		buttons.setAlignment(Pos.CENTER_RIGHT);
 
-        VBox root = new VBox(8, head, path, status, diff, reason, buttons);
-        root.setPadding(new Insets(12));
-        return FxUtil.stage("SSH-Gateway – Approve File Change", root, 900, 620);
-    }
+		VBox root = new VBox(8, head, path, status, diff, reason, buttons);
+		root.setPadding(new Insets(12));
+		return FxUtil.stage("SSH-Gateway – Approve File Change", root, 900, 620);
+	}
 }
