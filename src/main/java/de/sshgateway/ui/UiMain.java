@@ -14,6 +14,13 @@ import de.sshgateway.security.RiskAnalyzer;
 import de.sshgateway.ssh.SshConnection;
 import javafx.application.Platform;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.MenuItem;
+import java.awt.PopupMenu;
+import java.awt.SystemTray;
+import java.awt.TrayIcon;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -36,6 +43,7 @@ public final class UiMain {
 	}
 
 	public static void run() throws Exception {
+		setupTrayIcon();
 		Path home = GatewayConfig.homeDir();
 		Files.createDirectories(home);
 		GatewayConfig cfg = GatewayConfig.load(home);
@@ -82,6 +90,63 @@ public final class UiMain {
 		} finally {
 			Platform.exit();
 		}
+	}
+
+	/**
+	 * Sets up the system tray icon with a tray menu to close the app.
+	 */
+	private static void setupTrayIcon() {
+		if (!SystemTray.isSupported()) {
+			return;
+		}
+		SystemTray tray = SystemTray.getSystemTray();
+		TrayIcon trayIcon = getTrayIcon();
+		trayIcon.setToolTip("SSH Gateway");
+
+		PopupMenu popup = new PopupMenu();
+		MenuItem exitItem = new MenuItem("Exit");
+		exitItem.addActionListener(e -> System.exit(0));
+		popup.add(exitItem);
+
+		trayIcon.setPopupMenu(popup);
+		try {
+			tray.add(trayIcon);
+		} catch (Exception e) {
+			System.err.println("Could not add tray icon: " + e);
+		}
+	}
+
+	/**
+	 * Creates a tray icon with a server symbol.
+	 *
+	 * @return tray icon
+	 */
+	private static TrayIcon getTrayIcon() {
+		BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB);
+		Graphics2D g2d = image.createGraphics();
+
+		// Background
+		g2d.setColor(new Color(45, 45, 48)); // Dark grey background
+		g2d.fillRect(0, 0, 16, 16);
+
+		// Server body
+		g2d.setColor(new Color(100, 100, 100));
+		g2d.fillRect(3, 4, 10, 8);
+
+		// Server lines (slots)
+		g2d.setColor(new Color(180, 180, 180));
+		g2d.drawLine(4, 6, 12, 6);
+		g2d.drawLine(4, 8, 12, 8);
+		g2d.drawLine(4, 10, 12, 10);
+
+		// Status indicator (SSH/Active)
+		g2d.setColor(Color.CYAN);
+		g2d.fillOval(12, 4, 2, 2);
+
+		g2d.dispose();
+
+		TrayIcon trayIcon = new TrayIcon(image, "SSH Gateway");
+		return trayIcon;
 	}
 
 	private static void handleConnection(Socket socket, String expectedToken, List<ToolDef> defs) throws IOException {
