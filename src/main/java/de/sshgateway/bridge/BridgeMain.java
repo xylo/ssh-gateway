@@ -92,20 +92,18 @@ public final class BridgeMain {
 	}
 
 	private static void copy(InputStream in, OutputStream out, Socket socket) {
-		try {
-			byte[] buf = new byte[8192];
-			int n;
-			while ((n = in.read(buf)) != -1) {
-				out.write(buf, 0, n);
-				out.flush();
+		try (socket) {
+			try {
+				byte[] buf = new byte[8192];
+				int n;
+				while ((n = in.read(buf)) != -1) {
+					out.write(buf, 0, n);
+					out.flush();
+				}
+			} catch (IOException ignored) {
+				// Connection terminated – session is over
 			}
 		} catch (IOException ignored) {
-			// Connection terminated – session is over
-		} finally {
-			try {
-				socket.close();
-			} catch (IOException ignored) {
-			}
 		}
 	}
 }
