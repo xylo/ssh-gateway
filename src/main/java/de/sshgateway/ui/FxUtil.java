@@ -5,6 +5,7 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.stage.Stage;
+import lombok.val;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -21,8 +22,8 @@ final class FxUtil {
 	 * If the calling thread is interrupted (cancelled by Claude Code), the window is closed.
 	 */
 	static <T> T ask(T defaultValue, Function<CompletableFuture<T>, Stage> factory) throws InterruptedException {
-		CompletableFuture<T> future = new CompletableFuture<>();
-		AtomicReference<Stage> ref = new AtomicReference<>();
+		val future = new CompletableFuture<T>();
+		val ref = new AtomicReference<Stage>();
 		Platform.runLater(() -> {
 			try {
 				Stage s = factory.apply(future);
@@ -48,9 +49,9 @@ final class FxUtil {
 	}
 
 	static Stage stage(String title, Parent root, double width, double height) {
-		Stage stage = new Stage();
+		val stage = new Stage();
 		stage.setTitle(title);
-		Scene scene = new Scene(root, width, height);
+		val scene = new Scene(root, width, height);
 		scene.getStylesheets().add(FxUtil.class.getResource("/review.css").toExternalForm());
 		stage.setScene(scene);
 		stage.setAlwaysOnTop(true);

@@ -3,6 +3,8 @@ package de.sshgateway.ui;
 import java.io.IOException;
 import java.nio.file.Path;
 
+import lombok.val;
+
 /**
  * Opens the IntelliJ diff via "idea diff <left> <right>". Display-only, returns no decision.
  */
@@ -18,7 +20,7 @@ final class IdeaDiff {
 			return "IntelliJ launch is disabled (ideaCommand is empty). Use the text diff below.";
 		}
 		try {
-			Process p = new ProcessBuilder(ideaCommand, "diff", left.toString(), right.toString())
+		val p = new ProcessBuilder(ideaCommand, "diff", left.toString(), right.toString())
 					.redirectErrorStream(true)
 					.redirectOutput(ProcessBuilder.Redirect.DISCARD)
 					.start();

@@ -13,6 +13,7 @@ import de.sshgateway.security.PathPolicy;
 import de.sshgateway.security.RiskAnalyzer;
 import de.sshgateway.ssh.SshConnection;
 import javafx.application.Platform;
+import lombok.val;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -44,31 +45,31 @@ public final class UiMain {
 
 	public static void run() throws Exception {
 		setupTrayIcon();
-		Path home = GatewayConfig.homeDir();
+		val home = GatewayConfig.homeDir();
 		Files.createDirectories(home);
-		GatewayConfig cfg = GatewayConfig.load(home);
+		val cfg = GatewayConfig.load(home);
 
-		CountDownLatch fxReady = new CountDownLatch(1);
+		val fxReady = new CountDownLatch(1);
 		Platform.startup(fxReady::countDown);
 		fxReady.await();
 		Platform.setImplicitExit(false);
 
-		RedactionStore store = new RedactionStore(home.resolve("redactions.json"));
-		PathPolicy policy = new PathPolicy(cfg.denyPaths());
-		RiskAnalyzer risk = new RiskAnalyzer(cfg.extraRiskPatterns(), policy.literalHints());
-		ReviewService review = new FxReviewService(store, cfg.ideaCommand());
-		AuditLog audit = new AuditLog(home.resolve("audit.log"));
+		val store = new RedactionStore(home.resolve("redactions.json"));
+		val policy = new PathPolicy(cfg.denyPaths());
+		val risk = new RiskAnalyzer(cfg.extraRiskPatterns(), policy.literalHints());
+		val review = new FxReviewService(store, cfg.ideaCommand());
+		val audit = new AuditLog(home.resolve("audit.log"));
 
-		Path tokenFile = home.resolve("bridge.token");
-		String token = BridgeToken.generate();
+		val tokenFile = home.resolve("bridge.token");
+		val token = BridgeToken.generate();
 		BridgeToken.write(tokenFile, token);
 
 		try (SshConnection ssh = new SshConnection(cfg)) {
-			GatewayTools gatewayTools = new GatewayTools(cfg, ssh, store, review, policy, risk,
+			val gatewayTools = new GatewayTools(cfg, ssh, store, review, policy, risk,
 					new Backups(home.resolve("backups")), audit);
-			List<ToolDef> defs = gatewayTools.definitions();
+			val defs = gatewayTools.definitions();
 
-			InetAddress loopback = InetAddress.getLoopbackAddress();
+			val loopback = InetAddress.getLoopbackAddress();
 			try (ServerSocket server = new ServerSocket(cfg.bridgePort(), 1, loopback)) {
 				System.out.println("ssh-gateway UI ready for " + cfg.user() + "@" + cfg.host());
 				System.out.println("Configuration: " + home);
@@ -77,7 +78,7 @@ public final class UiMain {
 				System.out.println("(This window/console must remain open as long as Claude needs to use the server.)");
 
 				while (true) {
-					Socket socket = server.accept();
+					val socket = server.accept();
 					System.out.println("Bridge connected: " + socket.getRemoteSocketAddress());
 					try {
 						handleConnection(socket, token, defs);
@@ -99,12 +100,12 @@ public final class UiMain {
 		if (!SystemTray.isSupported()) {
 			return;
 		}
-		SystemTray tray = SystemTray.getSystemTray();
-		TrayIcon trayIcon = getTrayIcon();
+		val tray = SystemTray.getSystemTray();
+		val trayIcon = getTrayIcon();
 		trayIcon.setToolTip("SSH Gateway");
 
-		PopupMenu popup = new PopupMenu();
-		MenuItem exitItem = new MenuItem("Exit");
+		val popup = new PopupMenu();
+		val exitItem = new MenuItem("Exit");
 		exitItem.addActionListener(e -> System.exit(0));
 		popup.add(exitItem);
 
@@ -122,8 +123,8 @@ public final class UiMain {
 	 * @return tray icon
 	 */
 	private static TrayIcon getTrayIcon() {
-		BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB);
-		Graphics2D g2d = image.createGraphics();
+		val image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB);
+		val g2d = image.createGraphics();
 
 		// Background
 		g2d.setColor(new Color(45, 45, 48)); // Dark grey background
@@ -145,20 +146,19 @@ public final class UiMain {
 
 		g2d.dispose();
 
-		TrayIcon trayIcon = new TrayIcon(image, "SSH Gateway");
-		return trayIcon;
+		return new TrayIcon(image, "SSH Gateway");
 	}
 
 	private static void handleConnection(Socket socket, String expectedToken, List<ToolDef> defs) throws IOException {
 		socket.setTcpNoDelay(true);
-		InputStream in = socket.getInputStream();
-		String received = BridgeToken.readLine(in);
+		val in = socket.getInputStream();
+		val received = BridgeToken.readLine(in);
 		if (received == null || !BridgeToken.matches(received, expectedToken)) {
 			System.out.println("Connection rejected: invalid or missing token.");
 			socket.close();
 			return;
 		}
-		PrintStream out = new PrintStream(socket.getOutputStream(), true, StandardCharsets.UTF_8);
+		val out = new PrintStream(socket.getOutputStream(), true, StandardCharsets.UTF_8);
 		new McpServer(out, defs, GatewayTools.INSTRUCTIONS).run(in);
 	}
 }

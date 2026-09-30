@@ -2,6 +2,7 @@ package de.sshgateway;
 
 import de.sshgateway.bridge.BridgeMain;
 import de.sshgateway.ui.UiMain;
+import lombok.val;
 
 /**
  * Two operating modes:
@@ -13,7 +14,7 @@ public final class Main {
 	}
 
 	static void main(String[] args) throws Exception {
-		boolean bridge = args.length > 0 && ("--bridge".equals(args[0]) || "-b".equals(args[0]));
+		val bridge = args.length > 0 && ("--bridge".equals(args[0]) || "-b".equals(args[0]));
 		if (bridge) {
 			BridgeMain.run();
 		} else {

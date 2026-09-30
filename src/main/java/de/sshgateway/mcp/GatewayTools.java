@@ -32,6 +32,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import lombok.val;
+
 /**
  * The tools that Claude sees. Every action goes through a blocklist, approval, and output review.
  */
@@ -112,9 +114,9 @@ public final class GatewayTools {
 	// ---------- run_command ----------
 
 	private ToolResult runCommand(JsonNode a) throws Exception {
-		String command = requireString(a, "command");
-		String description = optString(a, "description");
-		int timeout = Math.clamp(a.path("timeout_seconds").asInt(cfg.defaultTimeoutSeconds()), 1, 3600);
+		val command = requireString(a, "command");
+		val description = optString(a, "description");
+		val timeout = Math.clamp(a.path("timeout_seconds").asInt(cfg.defaultTimeoutSeconds()), 1, 3600);
 
 		for (Pattern p : blocked) {
 			if (p.matcher(command).find()) {
@@ -123,13 +125,13 @@ public final class GatewayTools {
 			}
 		}
 		audit.log("COMMAND-PROPOSED", command);
-		CommandDecision d = review.approveCommand(new CommandRequest(command, description, risk.analyze(command)));
+		val d = review.approveCommand(new CommandRequest(command, description, risk.analyze(command)));
 		if (d.action() == CommandDecision.Action.REJECT) {
 			audit.log("COMMAND-REJECTED", command);
 			return ToolResult.error("The user rejected this command. It was NOT executed." + reasonSuffix(d.reason()));
 		}
 		audit.log(d.action() == CommandDecision.Action.EXECUTE_HELD ? "COMMAND-EXECUTED-HELD" : "COMMAND-EXECUTED", command);
-		ExecResult r = ssh.exec(command, timeout);
+		val r = ssh.exec(command, timeout);
 		return deliver("Output from: " + shorten(command), formatExec(r, timeout),
 				d.action() == CommandDecision.Action.EXECUTE_HELD);
 	}
@@ -156,7 +158,7 @@ public final class GatewayTools {
 			return ToolResult.error(DENIED_MSG);
 		}
 		audit.log("READ", path);
-		byte[] data = ssh.readFile(path, cfg.maxFileBytes());
+		val data = ssh.readFile(path, cfg.maxFileBytes());
 		String text;
 		try {
 			text = decodeUtf8(data);
@@ -167,14 +169,14 @@ public final class GatewayTools {
 	}
 
 	private ToolResult listDir(JsonNode a) throws Exception {
-		String path = resolvePath(a.hasNonNull("path") ? a.get("path").asText() : ".");
+		val path = resolvePath(a.hasNonNull("path") ? a.get("path").asText() : ".");
 		if (isDenied(path)) {
 			audit.log("LIST-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
 		audit.log("LIST", path);
 		StringBuilder sb = new StringBuilder();
-		String base = path.endsWith("/") ? path : path + "/";
+		val base = path.endsWith("/") ? path : path + "/";
 		for (SshConnection.Entry e : ssh.list(path)) {
 			if (e.name().equals(".") || e.name().equals("..")) continue;
 			if (policy.isDenied(base + e.name())) continue; // blocked entries remain invisible
@@ -188,9 +190,9 @@ public final class GatewayTools {
 
 	private ToolResult editFile(JsonNode a) throws Exception {
 		String path = resolvePath(requireString(a, "path"));
-		String oldS = requireString(a, "old_string");
-		String newS = requireString(a, "new_string");
-		boolean all = a.path("replace_all").asBoolean(false);
+		val oldS = requireString(a, "old_string");
+		val newS = requireString(a, "new_string");
+		val all = a.path("replace_all").asBoolean(false);
 		if (oldS.isEmpty()) return ToolResult.error("old_string must not be empty.");
 		if (oldS.contains(Redactor.REPLACEMENT) || newS.contains(Redactor.REPLACEMENT))
 			return ToolResult.error(PLACEHOLDER_MSG);
@@ -199,14 +201,14 @@ public final class GatewayTools {
 			return ToolResult.error(DENIED_MSG);
 		}
 
-		byte[] before = ssh.readFile(path, cfg.maxFileBytes());
+		val before = ssh.readFile(path, cfg.maxFileBytes());
 		String oldText;
 		try {
 			oldText = decodeUtf8(before);
 		} catch (CharacterCodingException e) {
 			return ToolResult.error("The file is not valid UTF-8 text (binary file?).");
 		}
-		int count = countOccurrences(oldText, oldS);
+		val count = countOccurrences(oldText, oldS);
 		if (count == 0) {
 			return ToolResult.error("old_string was not found in the file. (If the content you saw was redacted by the user, "
 					+ "choose a section without redacted parts.)");
@@ -226,14 +228,14 @@ public final class GatewayTools {
 
 	private ToolResult writeFile(JsonNode a) throws Exception {
 		String path = resolvePath(requireString(a, "path"));
-		String content = requireString(a, "content");
+		val content = requireString(a, "content");
 		if (content.contains(Redactor.REPLACEMENT)) return ToolResult.error(PLACEHOLDER_MSG);
 		if (isDenied(path)) {
 			audit.log("WRITE-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
 
-		byte[] before = ssh.readFileIfExists(path, cfg.maxFileBytes());
+		val before = ssh.readFileIfExists(path, cfg.maxFileBytes());
 		String oldText;
 		try {
 			oldText = before == null ? "" : decodeUtf8(before);
@@ -250,7 +252,7 @@ public final class GatewayTools {
 																 boolean newFile, String summary) throws Exception {
 		if (oldText.equals(newText)) return ToolResult.ok("No change: the resulting content is identical.");
 		audit.log("EDIT-PROPOSED", path);
-		EditDecision d = review.approveEdit(new EditRequest(path, oldText, newText, newFile));
+		val d = review.approveEdit(new EditRequest(path, oldText, newText, newFile));
 		if (!d.approved()) {
 			audit.log("EDIT-REJECTED", path);
 			return ToolResult.error("The user rejected this change. The file was NOT modified." + reasonSuffix(d.reason()));
@@ -259,7 +261,7 @@ public final class GatewayTools {
 			if (ssh.exists(path))
 				return ToolResult.error("The file appeared on the server while waiting for approval; nothing was written.");
 		} else {
-			byte[] now = ssh.readFile(path, cfg.maxFileBytes());
+			val now = ssh.readFile(path, cfg.maxFileBytes());
 			if (!Arrays.equals(now, beforeBytes)) {
 				return ToolResult.error("The file changed on the server while waiting for approval; nothing was written. Re-read it and try again.");
 			}
@@ -271,7 +273,7 @@ public final class GatewayTools {
 	}
 
 	private ToolResult askUser(JsonNode a) throws Exception {
-		String answer = review.askUser(requireString(a, "question"));
+		val answer = review.askUser(requireString(a, "question"));
 		return answer == null || answer.isBlank()
 				? ToolResult.ok("The user did not provide an answer.")
 				: ToolResult.ok(answer);
@@ -280,11 +282,11 @@ public final class GatewayTools {
 	// ---------- Output review ----------
 
 	private ToolResult deliver(String title, String text, boolean forceReview) throws InterruptedException {
-		RedactionStore.Result red = store.apply(text);
+		val red = store.apply(text);
 		boolean mustReview = forceReview || !red.warnings().isEmpty();
 		if (!mustReview) return ToolResult.ok(red.text());
-		String warning = red.warnings().isEmpty() ? null : String.join("\n", red.warnings());
-		OutputDecision d = review.reviewOutput(new OutputRequest(title, text, red.text(), red.count(), warning));
+		val warning = red.warnings().isEmpty() ? null : String.join("\n", red.warnings());
+		val d = review.reviewOutput(new OutputRequest(title, text, red.text(), red.count(), warning));
 		if (!d.send()) {
 			audit.log("OUTPUT-WITHHELD", title);
 			return ToolResult.error("The user withheld this output." + reasonSuffix(d.reason()));
@@ -355,12 +357,12 @@ public final class GatewayTools {
 	}
 
 	private static ObjectNode schema(Prop... props) {
-		ObjectNode root = JsonNodeFactory.instance.objectNode();
+		val root = JsonNodeFactory.instance.objectNode();
 		root.put("type", "object");
-		ObjectNode properties = root.putObject("properties");
-		ArrayNode required = root.putArray("required");
+		val properties = root.putObject("properties");
+		val required = root.putArray("required");
 		for (Prop p : props) {
-			ObjectNode n = properties.putObject(p.name());
+			val n = properties.putObject(p.name());
 			n.put("type", p.type());
 			n.put("description", p.description());
 			if (p.required()) required.add(p.name());

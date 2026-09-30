@@ -6,11 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintStream;
+import java.io.*;
+
+import lombok.val;
+
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -113,10 +112,10 @@ public final class McpServer {
 	}
 
 	private void callTool(JsonNode id, JsonNode params) {
-		String key = id.asText();
+		val key = id.asText();
 		inflight.put(key, Thread.currentThread());
 		try {
-			ToolDef tool = tools.get(params.path("name").asText(""));
+			val tool = tools.get(params.path("name").asText(""));
 			if (tool == null) {
 				sendError(id, -32602, "Unknown tool: " + params.path("name").asText(""));
 				return;
@@ -130,8 +129,8 @@ public final class McpServer {
 				System.err.println("Tool error (" + tool.name() + "): " + e);
 				res = ToolResult.error("Gateway error: " + e.getMessage());
 			}
-			ObjectNode result = om.createObjectNode();
-			ArrayNode content = result.putArray("content");
+			val result = om.createObjectNode();
+			val content = result.putArray("content");
 			content.addObject().put("type", "text").put("text", res.text());
 			result.put("isError", res.isError());
 			reply(id, result);
@@ -154,7 +153,7 @@ public final class McpServer {
 		n.put("jsonrpc", "2.0");
 		if (id == null) n.putNull("id");
 		else n.set("id", id);
-		ObjectNode err = n.putObject("error");
+		val err = n.putObject("error");
 		err.put("code", code);
 		err.put("message", message);
 		send(n);

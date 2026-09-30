@@ -13,6 +13,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import lombok.val;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -22,35 +23,35 @@ final class EditDialog {
 
 	static Stage create(EditRequest req, String unifiedDiff, String ideaStatus, Runnable reopenIdea,
 											CompletableFuture<EditDecision> future) {
-		Label head = new Label(req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file");
+		val head = new Label(req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file");
 		head.getStyleClass().add("heading");
-		Label path = new Label(req.path());
+		val path = new Label(req.path());
 		path.getStyleClass().add("mono");
-		Label status = new Label(ideaStatus);
+		val status = new Label(ideaStatus);
 		status.setWrapText(true);
 		status.getStyleClass().add("hint");
 
-		TextArea diff = new TextArea(unifiedDiff);
+		val diff = new TextArea(unifiedDiff);
 		diff.setEditable(false);
 		diff.getStyleClass().add("mono");
 		VBox.setVgrow(diff, Priority.ALWAYS);
 
-		TextField reason = new TextField();
+		val reason = new TextField();
 		reason.setPromptText("Reason for rejection (optional – will be passed to Claude)");
 
-		Button reopen = new Button("Re-open diff in IntelliJ");
+		val reopen = new Button("Re-open diff in IntelliJ");
 		reopen.setOnAction(e -> reopenIdea.run());
-		Button reject = new Button("Reject");
-		Button accept = new Button("Accept");
+		val reject = new Button("Reject");
+		val accept = new Button("Accept");
 		FxUtil.finishWith(reject, future, () -> new EditDecision(false, reason.getText()));
 		FxUtil.finishWith(accept, future, () -> new EditDecision(true, null));
 
-		Region spacer = new Region();
+		var spacer = new Region();
 		HBox.setHgrow(spacer, Priority.ALWAYS);
-		HBox buttons = new HBox(8, reopen, spacer, reject, accept);
+		val buttons = new HBox(8, reopen, spacer, reject, accept);
 		buttons.setAlignment(Pos.CENTER_RIGHT);
 
-		VBox root = new VBox(8, head, path, status, diff, reason, buttons);
+		val root = new VBox(8, head, path, status, diff, reason, buttons);
 		root.setPadding(new Insets(12));
 		return FxUtil.stage("SSH-Gateway – Approve File Change", root, 900, 620);
 	}
