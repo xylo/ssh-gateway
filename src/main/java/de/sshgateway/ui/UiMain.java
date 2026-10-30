@@ -70,7 +70,7 @@ public final class UiMain {
 			val defs = gatewayTools.definitions();
 
 			val loopback = InetAddress.getLoopbackAddress();
-			try (ServerSocket server = new ServerSocket(cfg.bridgePort(), 1, loopback)) {
+			try (ServerSocket server = new ServerSocket(cfg.bridgePort(), 50, loopback)) {
 				System.out.println("ssh-gateway UI ready for " + cfg.user() + "@" + cfg.host());
 				System.out.println("Configuration: " + home);
 				System.out.println("Bridge token: " + tokenFile);
@@ -80,12 +80,15 @@ public final class UiMain {
 				while (true) {
 					val socket = server.accept();
 					System.out.println("Bridge connected: " + socket.getRemoteSocketAddress());
-					try {
-						handleConnection(socket, token, defs);
-					} catch (IOException e) {
-						System.out.println("Connection closed: " + e.getMessage());
-					}
-					System.out.println("Bridge disconnected – waiting for next connection.");
+					Thread.ofVirtual().name("bridge-session-", 0).start(() -> {
+						try (socket) {
+							handleConnection(socket, token, defs);
+						} catch (IOException e) {
+							System.out.println("Connection closed: " + e.getMessage());
+						} finally {
+							System.out.println("Bridge disconnected: " + socket.getRemoteSocketAddress());
+						}
+					});
 				}
 			}
 		} finally {
