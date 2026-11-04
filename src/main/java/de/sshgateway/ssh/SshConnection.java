@@ -17,6 +17,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
 import java.util.List;
@@ -68,9 +70,21 @@ public class SshConnection implements AutoCloseable {
 				c.loadKnownHosts(new File(cfg.knownHostsFile()));
 			else c.loadKnownHosts();
 			c.setConnectTimeout(15_000);
-			c.connect(cfg.host(), cfg.port());
+			try {
+				c.connect(cfg.host(), cfg.port());
+			} catch (UnknownHostException e) {
+				throw new IOException("Cannot resolve host '" + cfg.host() + "' for server '" + cfg.name() + "'. Please check hostname in config.json.", e);
+			} catch (ConnectException e) {
+				throw new IOException("Connection refused for server '" + cfg.name() + "' (" + cfg.host() + ":" + cfg.port() + ").", e);
+			} catch (IOException e) {
+				throw new IOException("SSH connection failed for server '" + cfg.name() + "' (" + cfg.host() + ":" + cfg.port() + "): " + e.getMessage(), e);
+			}
 			c.getConnection().getKeepAlive().setKeepAliveInterval(30);
-			authenticate(c);
+			try {
+				authenticate(c);
+			} catch (IOException e) {
+				throw new IOException("SSH authentication failed for server '" + cfg.name() + "' (user '" + cfg.user() + "'): " + e.getMessage(), e);
+			}
 		} catch (IOException | RuntimeException e) {
 			try {
 				c.close();

@@ -127,7 +127,12 @@ public final class McpServer {
 				return; // cancelled by client: do not send a response per specification
 			} catch (Exception e) {
 				System.err.println("Tool error (" + tool.name() + "): " + e);
-				res = ToolResult.error("Gateway error: " + e.getMessage());
+				e.printStackTrace(System.err);
+				String msg = e.getMessage();
+				if (msg == null || msg.isBlank()) {
+					msg = e.getClass().getSimpleName();
+				}
+				res = ToolResult.error("Gateway error: " + msg + " (Check SSH Gateway console for full stack trace)");
 			}
 			val result = om.createObjectNode();
 			val content = result.putArray("content");

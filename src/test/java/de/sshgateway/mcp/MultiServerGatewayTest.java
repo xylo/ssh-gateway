@@ -199,4 +199,13 @@ class MultiServerGatewayTest {
 		assertFalse(res.isError());
 		assertTrue(res.text().contains("content on db of /etc/postgresql/postgresql.conf"));
 	}
+
+	@Test
+	void testSshConnectionUnknownHostErrorMessage() {
+		ServerConfig invalidCfg = new ServerConfig("badserver", "this-host-does-not-exist-12345.invalid", 22, "user", null, null, List.of(), List.of(), List.of(), 5, 100_000, 100_000);
+		SshConnection conn = new SshConnection(invalidCfg);
+		IOException ex = assertThrows(IOException.class, () -> conn.exec("ls", 5));
+		assertTrue(ex.getMessage().contains("Cannot resolve host 'this-host-does-not-exist-12345.invalid' for server 'badserver'"));
+		assertTrue(ex.getMessage().contains("Please check hostname in config.json"));
+	}
 }
