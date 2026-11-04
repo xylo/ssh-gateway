@@ -53,6 +53,7 @@ public final class GatewayTools {
 	private static final String DENIED_MSG = "Access to this path is blocked by the gateway's deny list.";
 	private static final String PLACEHOLDER_MSG = "The text contains the redaction placeholder '" + Redactor.REPLACEMENT
 			+ "'. Redacted values cannot be written back. Choose old_string/new_string/content without redacted parts.";
+	private static final Pattern SUDO_PATTERN = Pattern.compile("\\bsudo\\b");
 
 	private final GatewayConfig cfg;
 	private final SshConnection ssh;
@@ -130,10 +131,44 @@ public final class GatewayTools {
 			audit.log("COMMAND-REJECTED", command);
 			return ToolResult.error("The user rejected this command. It was NOT executed." + reasonSuffix(d.reason()));
 		}
+
+		if (SUDO_PATTERN.matcher(command).find()) {
+			if (!ensureSudoValidated()) {
+				audit.log("SUDO-ABORTED", command);
+				return ToolResult.error("Sudo authentication was not successful or was cancelled by the user. The command was NOT executed.");
+			}
+		}
+
 		audit.log(d.action() == CommandDecision.Action.EXECUTE_HELD ? "COMMAND-EXECUTED-HELD" : "COMMAND-EXECUTED", command);
 		val r = ssh.exec(command, timeout);
 		return deliver("Output from: " + shorten(command), formatExec(r, timeout),
 				d.action() == CommandDecision.Action.EXECUTE_HELD);
+	}
+
+	private boolean ensureSudoValidated() throws Exception {
+		val testRes = ssh.exec("sudo -n -v", 10);
+		if (testRes.exitCode() == 0) {
+			return true;
+		}
+
+		String errorMsg = null;
+		for (int attempt = 0; attempt < 3; attempt++) {
+			val prompt = "A sudo command is about to be executed on " + cfg.user() + "@" + cfg.host()
+					+ ".\nPlease enter your sudo password to unlock sudo permissions:";
+			val password = review.askPassword(prompt, errorMsg);
+			if (password == null) {
+				audit.log("SUDO-CANCELLED", cfg.user() + "@" + cfg.host());
+				return false;
+			}
+			val authRes = ssh.exec("sudo -S -p '' -v", 15, (password + "\n").getBytes(StandardCharsets.UTF_8));
+			if (authRes.exitCode() == 0) {
+				audit.log("SUDO-VALIDATED", cfg.user() + "@" + cfg.host());
+				return true;
+			}
+			errorMsg = "Authentication failed (incorrect password). Please try again.";
+			audit.log("SUDO-FAILED-ATTEMPT", "Attempt " + (attempt + 1) + " failed for " + cfg.user() + "@" + cfg.host());
+		}
+		return false;
 	}
 
 	private static String formatExec(ExecResult r, int timeout) {

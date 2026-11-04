@@ -29,7 +29,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * Thin sshj wrapper: commands and SFTP. (Re)connects on demand.
  */
-public final class SshConnection implements AutoCloseable {
+public class SshConnection implements AutoCloseable {
 
 	/**
 	 * A directory entry.
@@ -93,12 +93,25 @@ public final class SshConnection implements AutoCloseable {
 	// ---------- Commands ----------
 
 	public ExecResult exec(String command, int timeoutSeconds) throws IOException {
+		return exec(command, timeoutSeconds, null);
+	}
+
+	public ExecResult exec(String command, int timeoutSeconds, byte[] stdin) throws IOException {
 		SSHClient c = client();
 		try (Session session = c.startSession()) {
 			long start = System.nanoTime();
 			Session.Command cmd = session.exec(command);
 			Future<Captured> out = pool.submit(() -> readCapped(cmd.getInputStream(), cfg.maxOutputBytes()));
 			Future<Captured> err = pool.submit(() -> readCapped(cmd.getErrorStream(), cfg.maxOutputBytes()));
+			if (stdin != null && stdin.length > 0) {
+				pool.submit(() -> {
+					try (OutputStream os = cmd.getOutputStream()) {
+						os.write(stdin);
+						os.flush();
+					} catch (IOException ignored) {
+					}
+				});
+			}
 			try {
 				cmd.join(timeoutSeconds, TimeUnit.SECONDS);
 			} catch (ConnectionException ignored) {

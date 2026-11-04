@@ -42,4 +42,13 @@ public interface ReviewService {
 	 * @return the user's response, or null if they chose not to respond
 	 */
 	String askUser(String question) throws InterruptedException;
+
+	/**
+	 * Requests the sudo password from the user.
+	 *
+	 * @param prompt       the prompt message explaining why the password is requested
+	 * @param errorMessage an optional error message (e.g. if the previous attempt failed) or null
+	 * @return the password entered by the user, or null if cancelled
+	 */
+	String askPassword(String prompt, String errorMessage) throws InterruptedException;
 }

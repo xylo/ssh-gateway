@@ -88,6 +88,16 @@ public final class FxReviewService implements ReviewService {
 		}
 	}
 
+	@Override
+	public String askPassword(String prompt, String errorMessage) throws InterruptedException {
+		lock.lockInterruptibly();
+		try {
+			return FxUtil.ask(null, f -> PasswordDialog.create(prompt, errorMessage, f));
+		} finally {
+			lock.unlock();
+		}
+	}
+
 	private static String unifiedDiff(EditRequest req) {
 		val a = req.oldText().lines().toList();
 		val b = req.newText().lines().toList();
