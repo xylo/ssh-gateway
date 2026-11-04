@@ -4,50 +4,48 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import de.sshgateway.config.GatewayConfig;
-import de.sshgateway.redaction.RedactionStore;
+import de.sshgateway.config.ServerConfig;
 import de.sshgateway.redaction.Redactor;
 import de.sshgateway.review.ReviewService;
 import de.sshgateway.review.ReviewService.CommandDecision;
 import de.sshgateway.review.ReviewService.CommandRequest;
-import de.sshgateway.review.ReviewService.EditDecision;
 import de.sshgateway.review.ReviewService.EditRequest;
-import de.sshgateway.review.ReviewService.OutputDecision;
 import de.sshgateway.review.ReviewService.OutputRequest;
-import de.sshgateway.security.AuditLog;
-import de.sshgateway.security.Backups;
-import de.sshgateway.security.PathPolicy;
-import de.sshgateway.security.RiskAnalyzer;
+import de.sshgateway.server.ServerContext;
 import de.sshgateway.ssh.ExecResult;
 import de.sshgateway.ssh.SshConnection;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import lombok.val;
 
 /**
- * The tools that Claude sees. Every action goes through a blocklist, approval, and output review.
+ * The tools that Claude sees. Supports multi-server environments.
+ * Every action goes through a blocklist, approval, and output review.
  */
 public final class GatewayTools {
 
 	public static final String INSTRUCTIONS = """
-			This server is a gateway to one remote Linux server. A human reviews everything you do:
+			This server is a gateway to remote Linux servers. A human reviews everything you do:
+			- Specify the target 'server' parameter when executing commands or accessing files.
 			- Every command must be approved by the user; it may be rejected (you will get the reason). Do not retry rejected commands unchanged.
 			- Command output and file contents are reviewed by the user first. Sensitive parts are replaced by the placeholder \
 			'*** SENSIBLE INFORMATION ***'. Never write this placeholder into files and never guess the hidden values.
 			- File changes are shown to the user as a diff and may be rejected.
 			- Some paths (secrets, keys, .env files) are blocked entirely.
 			- Prefer read-only commands to investigate before changing anything. Use the ask_user tool if requirements are unclear.
-			- Relative paths are relative to the SSH user's home directory.
+			- Relative paths are relative to the SSH user's home directory on the target server.
 			""";
 
 	private static final String DENIED_MSG = "Access to this path is blocked by the gateway's deny list.";
@@ -55,118 +53,205 @@ public final class GatewayTools {
 			+ "'. Redacted values cannot be written back. Choose old_string/new_string/content without redacted parts.";
 	private static final Pattern SUDO_PATTERN = Pattern.compile("\\bsudo\\b");
 
-	private final GatewayConfig cfg;
-	private final SshConnection ssh;
-	private final RedactionStore store;
+	private final Map<String, ServerContext> serverContexts;
+	private final String defaultServer;
 	private final ReviewService review;
-	private final PathPolicy policy;
-	private final RiskAnalyzer risk;
-	private final Backups backups;
-	private final AuditLog audit;
-	private final List<Pattern> blocked = new ArrayList<>();
 
-	public GatewayTools(GatewayConfig cfg, SshConnection ssh, RedactionStore store, ReviewService review,
-											PathPolicy policy, RiskAnalyzer risk, Backups backups, AuditLog audit) {
-		this.cfg = cfg;
-		this.ssh = ssh;
-		this.store = store;
+	public GatewayTools(Map<String, ServerContext> serverContexts, String defaultServer, ReviewService review) {
+		if (serverContexts == null || serverContexts.isEmpty()) {
+			throw new IllegalArgumentException("GatewayTools requires at least one server context.");
+		}
+		this.serverContexts = Collections.unmodifiableMap(new LinkedHashMap<>(serverContexts));
+		this.defaultServer = defaultServer != null && this.serverContexts.containsKey(defaultServer)
+				? defaultServer
+				: (this.serverContexts.size() == 1 ? this.serverContexts.keySet().iterator().next() : null);
 		this.review = review;
-		this.policy = policy;
-		this.risk = risk;
-		this.backups = backups;
-		this.audit = audit;
-		for (String p : cfg.blockedCommandPatterns()) blocked.add(Pattern.compile(p, Pattern.CASE_INSENSITIVE));
+	}
+
+	public static String buildInstructions(Map<String, ServerConfig> servers, String defaultServer) {
+		StringBuilder sb = new StringBuilder();
+		sb.append("This server is a gateway to ").append(servers.size() == 1 ? "one remote Linux server" : servers.size() + " remote Linux servers").append(":\n");
+		for (var entry : servers.entrySet()) {
+			var s = entry.getValue();
+			sb.append("- ").append(entry.getKey()).append(": ").append(s.user()).append("@").append(s.host()).append(":").append(s.port());
+			if (entry.getKey().equals(defaultServer)) {
+				sb.append(" [default]");
+			}
+			sb.append("\n");
+		}
+		sb.append("""
+				A human reviews everything you do:
+				- Specify the target 'server' parameter when running commands or accessing files.
+				- Every command must be approved by the user; it may be rejected (you will get the reason). Do not retry rejected commands unchanged.
+				- Command output and file contents are reviewed by the user first. Sensitive parts are replaced by the placeholder '*** SENSIBLE INFORMATION ***'. Never write this placeholder into files and never guess the hidden values.
+				- File changes are shown to the user as a diff and may be rejected.
+				- Some paths (secrets, keys, .env files) are blocked entirely.
+				- Prefer read-only commands to investigate before changing anything. Use the ask_user tool if requirements are unclear.
+				- Relative paths are relative to the SSH user's home directory on the target server.
+				""");
+		return sb.toString();
 	}
 
 	public List<ToolDef> definitions() {
-		return List.of(
-				new ToolDef("run_command",
-						"Run a shell command on the remote server. The user must approve every command and reviews its output before you see it.",
-						schema(prop("command", "string", "The shell command to run", true),
-								prop("description", "string", "One sentence explaining to the user why this command is needed", false),
-								prop("timeout_seconds", "integer", "Timeout in seconds (default " + cfg.defaultTimeoutSeconds() + ", max 3600)", false)),
-						this::runCommand),
-				new ToolDef("read_file",
-						"Read a text file from the remote server. The user reviews (and may redact) the content before you receive it.",
-						schema(prop("path", "string", "Absolute path or path relative to the home directory", true)),
-						this::readFile),
-				new ToolDef("edit_file",
-						"Replace exact text in a remote file. The user sees a diff and must approve. old_string must match exactly once unless replace_all is true.",
-						schema(prop("path", "string", "File path", true),
-								prop("old_string", "string", "Exact text to replace (must not contain redacted placeholders)", true),
-								prop("new_string", "string", "Replacement text", true),
-								prop("replace_all", "boolean", "Replace all occurrences (default false)", false)),
-						this::editFile),
-				new ToolDef("write_file",
-						"Create or completely overwrite a remote text file. The user sees a diff and must approve. Prefer edit_file for small changes.",
-						schema(prop("path", "string", "File path", true),
-								prop("content", "string", "Complete new file content", true)),
-						this::writeFile),
-				new ToolDef("list_dir",
-						"List a remote directory. The user reviews the listing before you receive it.",
-						schema(prop("path", "string", "Directory path (default: home directory)", false)),
-						this::listDir),
-				new ToolDef("ask_user",
-						"Ask the user a clarifying question in a dialog and wait for the answer.",
-						schema(prop("question", "string", "The question", true)),
-						this::askUser));
+		String serverListDesc = String.join(", ", serverContexts.keySet());
+		boolean serverParamRequired = serverContexts.size() > 1 && defaultServer == null;
+		String serverPropDesc = "Target server name (" + serverListDesc + ")"
+				+ (defaultServer != null ? ". Default: '" + defaultServer + "'" : "");
+
+		List<ToolDef> defs = new ArrayList<>();
+		defs.add(new ToolDef("run_command",
+				"Run a shell command on the remote server. The user must approve every command and reviews its output before you see it.",
+				schema(
+						prop("server", "string", serverPropDesc, serverParamRequired),
+						prop("command", "string", "The shell command to run", true),
+						prop("description", "string", "One sentence explaining to the user why this command is needed", false),
+						prop("timeout_seconds", "integer", "Timeout in seconds (max 3600)", false)),
+				this::runCommand));
+
+		defs.add(new ToolDef("read_file",
+				"Read a text file from the remote server. The user reviews (and may redact) the content before you receive it.",
+				schema(
+						prop("server", "string", serverPropDesc, serverParamRequired),
+						prop("path", "string", "Absolute path or path relative to the home directory", true)),
+				this::readFile));
+
+		defs.add(new ToolDef("edit_file",
+				"Replace exact text in a remote file. The user sees a diff and must approve. old_string must match exactly once unless replace_all is true.",
+				schema(
+						prop("server", "string", serverPropDesc, serverParamRequired),
+						prop("path", "string", "File path", true),
+						prop("old_string", "string", "Exact text to replace (must not contain redacted placeholders)", true),
+						prop("new_string", "string", "Replacement text", true),
+						prop("replace_all", "boolean", "Replace all occurrences (default false)", false)),
+				this::editFile));
+
+		defs.add(new ToolDef("write_file",
+				"Create or completely overwrite a remote text file. The user sees a diff and must approve. Prefer edit_file for small changes.",
+				schema(
+						prop("server", "string", serverPropDesc, serverParamRequired),
+						prop("path", "string", "File path", true),
+						prop("content", "string", "Complete new file content", true)),
+				this::writeFile));
+
+		defs.add(new ToolDef("list_dir",
+				"List a remote directory. The user reviews the listing before you receive it.",
+				schema(
+						prop("server", "string", serverPropDesc, serverParamRequired),
+						prop("path", "string", "Directory path (default: home directory)", false)),
+				this::listDir));
+
+		defs.add(new ToolDef("list_servers",
+				"List all configured remote servers available through this gateway.",
+				schema(),
+				this::listServers));
+
+		defs.add(new ToolDef("ask_user",
+				"Ask the user a clarifying question in a dialog and wait for the answer.",
+				schema(prop("question", "string", "The question", true)),
+				this::askUser));
+
+		return List.copyOf(defs);
+	}
+
+	private ServerContext resolveServer(JsonNode a) {
+		String serverName = a != null && a.hasNonNull("server") ? a.get("server").asText().trim() : null;
+		if (serverName != null && !serverName.isEmpty()) {
+			ServerContext ctx = serverContexts.get(serverName);
+			if (ctx == null) {
+				throw new IllegalArgumentException("Unknown server '" + serverName + "'. Available servers: "
+						+ String.join(", ", serverContexts.keySet()));
+			}
+			return ctx;
+		}
+		if (defaultServer != null && serverContexts.containsKey(defaultServer)) {
+			return serverContexts.get(defaultServer);
+		}
+		if (serverContexts.size() == 1) {
+			return serverContexts.values().iterator().next();
+		}
+		throw new IllegalArgumentException("Parameter 'server' is required because multiple servers are configured. Available servers: "
+				+ String.join(", ", serverContexts.keySet()));
+	}
+
+	// ---------- list_servers ----------
+
+	private ToolResult listServers(JsonNode a) {
+		StringBuilder sb = new StringBuilder("Available servers:\n");
+		for (ServerContext ctx : serverContexts.values()) {
+			var sc = ctx.config();
+			sb.append("- ").append(ctx.name()).append(": ")
+					.append(sc.user()).append("@").append(sc.host()).append(":").append(sc.port());
+			if (ctx.name().equals(defaultServer)) {
+				sb.append(" [default]");
+			}
+			sb.append("\n");
+		}
+		return ToolResult.ok(sb.toString().trim());
 	}
 
 	// ---------- run_command ----------
 
 	private ToolResult runCommand(JsonNode a) throws Exception {
+		ServerContext ctx;
+		try {
+			ctx = resolveServer(a);
+		} catch (IllegalArgumentException e) {
+			return ToolResult.error(e.getMessage());
+		}
+
 		val command = requireString(a, "command");
 		val description = optString(a, "description");
-		val timeout = Math.clamp(a.path("timeout_seconds").asInt(cfg.defaultTimeoutSeconds()), 1, 3600);
+		val timeout = Math.clamp(a.path("timeout_seconds").asInt(ctx.config().defaultTimeoutSeconds()), 1, 3600);
 
-		for (Pattern p : blocked) {
+		for (Pattern p : ctx.blockedPatterns()) {
 			if (p.matcher(command).find()) {
-				audit.log("COMMAND-BLOCKED", command);
-				return ToolResult.error("This command matches a blocking rule of the gateway and was not executed.");
+				ctx.audit().log("COMMAND-BLOCKED", command);
+				return ToolResult.error("This command matches a blocking rule of the gateway for server '" + ctx.name() + "' and was not executed.");
 			}
 		}
-		audit.log("COMMAND-PROPOSED", command);
-		val d = review.approveCommand(new CommandRequest(command, description, risk.analyze(command)));
+		ctx.audit().log("COMMAND-PROPOSED", command);
+		val d = review.approveCommand(new CommandRequest(ctx.name(), command, description, ctx.risk().analyze(command)));
 		if (d.action() == CommandDecision.Action.REJECT) {
-			audit.log("COMMAND-REJECTED", command);
-			return ToolResult.error("The user rejected this command. It was NOT executed." + reasonSuffix(d.reason()));
+			ctx.audit().log("COMMAND-REJECTED", command);
+			return ToolResult.error("The user rejected this command on " + ctx.name() + ". It was NOT executed." + reasonSuffix(d.reason()));
 		}
 
 		if (SUDO_PATTERN.matcher(command).find()) {
-			if (!ensureSudoValidated()) {
-				audit.log("SUDO-ABORTED", command);
+			if (!ensureSudoValidated(ctx)) {
+				ctx.audit().log("SUDO-ABORTED", command);
 				return ToolResult.error("Sudo authentication was not successful or was cancelled by the user. The command was NOT executed.");
 			}
 		}
 
-		audit.log(d.action() == CommandDecision.Action.EXECUTE_HELD ? "COMMAND-EXECUTED-HELD" : "COMMAND-EXECUTED", command);
-		val r = ssh.exec(command, timeout);
-		return deliver("Output from: " + shorten(command), formatExec(r, timeout),
+		ctx.audit().log(d.action() == CommandDecision.Action.EXECUTE_HELD ? "COMMAND-EXECUTED-HELD" : "COMMAND-EXECUTED", command);
+		val r = ctx.ssh().exec(command, timeout);
+		return deliver(ctx, "Output from: " + shorten(command), formatExec(r, timeout),
 				d.action() == CommandDecision.Action.EXECUTE_HELD);
 	}
 
-	private boolean ensureSudoValidated() throws Exception {
-		val testRes = ssh.exec("sudo -n -v", 10);
+	private boolean ensureSudoValidated(ServerContext ctx) throws Exception {
+		val testRes = ctx.ssh().exec("sudo -n -v", 10);
 		if (testRes.exitCode() == 0) {
 			return true;
 		}
 
 		String errorMsg = null;
 		for (int attempt = 0; attempt < 3; attempt++) {
-			val prompt = "A sudo command is about to be executed on " + cfg.user() + "@" + cfg.host()
+			val prompt = "A sudo command is about to be executed on [" + ctx.name() + "] "
+					+ ctx.config().user() + "@" + ctx.config().host()
 					+ ".\nPlease enter your sudo password to unlock sudo permissions:";
-			val password = review.askPassword(prompt, errorMsg);
+			val password = review.askPassword(ctx.name(), prompt, errorMsg);
 			if (password == null) {
-				audit.log("SUDO-CANCELLED", cfg.user() + "@" + cfg.host());
+				ctx.audit().log("SUDO-CANCELLED", ctx.config().user() + "@" + ctx.config().host());
 				return false;
 			}
-			val authRes = ssh.exec("sudo -S -p '' -v", 15, (password + "\n").getBytes(StandardCharsets.UTF_8));
+			val authRes = ctx.ssh().exec("sudo -S -p '' -v", 15, (password + "\n").getBytes(StandardCharsets.UTF_8));
 			if (authRes.exitCode() == 0) {
-				audit.log("SUDO-VALIDATED", cfg.user() + "@" + cfg.host());
+				ctx.audit().log("SUDO-VALIDATED", ctx.config().user() + "@" + ctx.config().host());
 				return true;
 			}
 			errorMsg = "Authentication failed (incorrect password). Please try again.";
-			audit.log("SUDO-FAILED-ATTEMPT", "Attempt " + (attempt + 1) + " failed for " + cfg.user() + "@" + cfg.host());
+			ctx.audit().log("SUDO-FAILED-ATTEMPT", "Attempt " + (attempt + 1) + " failed for " + ctx.config().user() + "@" + ctx.config().host());
 		}
 		return false;
 	}
@@ -187,43 +272,64 @@ public final class GatewayTools {
 	// ---------- Files ----------
 
 	private ToolResult readFile(JsonNode a) throws Exception {
+		ServerContext ctx;
+		try {
+			ctx = resolveServer(a);
+		} catch (IllegalArgumentException e) {
+			return ToolResult.error(e.getMessage());
+		}
+
 		String path = resolvePath(requireString(a, "path"));
-		if (isDenied(path)) {
-			audit.log("READ-BLOCKED", path);
+		if (ctx.policy().isDenied(path)) {
+			ctx.audit().log("READ-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
-		audit.log("READ", path);
-		val data = ssh.readFile(path, cfg.maxFileBytes());
+		ctx.audit().log("READ", path);
+		val data = ctx.ssh().readFile(path, ctx.config().maxFileBytes());
 		String text;
 		try {
 			text = decodeUtf8(data);
 		} catch (CharacterCodingException e) {
 			return ToolResult.error("The file is not valid UTF-8 text (binary file?).");
 		}
-		return deliver("Read file: " + path, text, true);
+		return deliver(ctx, "Read file: " + path, text, true);
 	}
 
 	private ToolResult listDir(JsonNode a) throws Exception {
+		ServerContext ctx;
+		try {
+			ctx = resolveServer(a);
+		} catch (IllegalArgumentException e) {
+			return ToolResult.error(e.getMessage());
+		}
+
 		val path = resolvePath(a.hasNonNull("path") ? a.get("path").asText() : ".");
-		if (isDenied(path)) {
-			audit.log("LIST-BLOCKED", path);
+		if (ctx.policy().isDenied(path)) {
+			ctx.audit().log("LIST-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
-		audit.log("LIST", path);
+		ctx.audit().log("LIST", path);
 		StringBuilder sb = new StringBuilder();
 		val base = path.endsWith("/") ? path : path + "/";
-		for (SshConnection.Entry e : ssh.list(path)) {
+		for (SshConnection.Entry e : ctx.ssh().list(path)) {
 			if (e.name().equals(".") || e.name().equals("..")) continue;
-			if (policy.isDenied(base + e.name())) continue; // blocked entries remain invisible
+			if (ctx.policy().isDenied(base + e.name())) continue; // blocked entries remain invisible
 			sb.append(e.directory() ? "d " : "- ")
 					.append(e.name()).append(e.directory() ? "/" : "")
 					.append("  ").append(e.directory() ? "" : e.size() + " B  ")
 					.append(Instant.ofEpochSecond(e.mtimeEpochSeconds())).append('\n');
 		}
-		return deliver("Directory: " + path, sb.isEmpty() ? "(empty)\n" : sb.toString(), true);
+		return deliver(ctx, "Directory: " + path, sb.isEmpty() ? "(empty)\n" : sb.toString(), true);
 	}
 
 	private ToolResult editFile(JsonNode a) throws Exception {
+		ServerContext ctx;
+		try {
+			ctx = resolveServer(a);
+		} catch (IllegalArgumentException e) {
+			return ToolResult.error(e.getMessage());
+		}
+
 		String path = resolvePath(requireString(a, "path"));
 		val oldS = requireString(a, "old_string");
 		val newS = requireString(a, "new_string");
@@ -231,12 +337,12 @@ public final class GatewayTools {
 		if (oldS.isEmpty()) return ToolResult.error("old_string must not be empty.");
 		if (oldS.contains(Redactor.REPLACEMENT) || newS.contains(Redactor.REPLACEMENT))
 			return ToolResult.error(PLACEHOLDER_MSG);
-		if (isDenied(path)) {
-			audit.log("EDIT-BLOCKED", path);
+		if (ctx.policy().isDenied(path)) {
+			ctx.audit().log("EDIT-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
 
-		val before = ssh.readFile(path, cfg.maxFileBytes());
+		val before = ctx.ssh().readFile(path, ctx.config().maxFileBytes());
 		String oldText;
 		try {
 			oldText = decodeUtf8(before);
@@ -258,53 +364,60 @@ public final class GatewayTools {
 			int i = oldText.indexOf(oldS);
 			newText = oldText.substring(0, i) + newS + oldText.substring(i + oldS.length());
 		}
-		return applyChange(path, before, oldText, newText, false, count + " replacement(s)");
+		return applyChange(ctx, path, before, oldText, newText, false, count + " replacement(s)");
 	}
 
 	private ToolResult writeFile(JsonNode a) throws Exception {
+		ServerContext ctx;
+		try {
+			ctx = resolveServer(a);
+		} catch (IllegalArgumentException e) {
+			return ToolResult.error(e.getMessage());
+		}
+
 		String path = resolvePath(requireString(a, "path"));
 		val content = requireString(a, "content");
 		if (content.contains(Redactor.REPLACEMENT)) return ToolResult.error(PLACEHOLDER_MSG);
-		if (isDenied(path)) {
-			audit.log("WRITE-BLOCKED", path);
+		if (ctx.policy().isDenied(path)) {
+			ctx.audit().log("WRITE-BLOCKED", path);
 			return ToolResult.error(DENIED_MSG);
 		}
 
-		val before = ssh.readFileIfExists(path, cfg.maxFileBytes());
+		val before = ctx.ssh().readFileIfExists(path, ctx.config().maxFileBytes());
 		String oldText;
 		try {
 			oldText = before == null ? "" : decodeUtf8(before);
 		} catch (CharacterCodingException e) {
 			return ToolResult.error("The existing file is not valid UTF-8 text; refusing to overwrite it.");
 		}
-		return applyChange(path, before, oldText, content, before == null, before == null ? "new file" : "overwritten");
+		return applyChange(ctx, path, before, oldText, content, before == null, before == null ? "new file" : "overwritten");
 	}
 
 	/**
 	 * Diff approval, race check, local backup, write.
 	 */
-	private ToolResult applyChange(String path, byte[] beforeBytes, String oldText, String newText,
-																 boolean newFile, String summary) throws Exception {
+	private ToolResult applyChange(ServerContext ctx, String path, byte[] beforeBytes, String oldText, String newText,
+								   boolean newFile, String summary) throws Exception {
 		if (oldText.equals(newText)) return ToolResult.ok("No change: the resulting content is identical.");
-		audit.log("EDIT-PROPOSED", path);
-		val d = review.approveEdit(new EditRequest(path, oldText, newText, newFile));
+		ctx.audit().log("EDIT-PROPOSED", path);
+		val d = review.approveEdit(new EditRequest(ctx.name(), path, oldText, newText, newFile));
 		if (!d.approved()) {
-			audit.log("EDIT-REJECTED", path);
-			return ToolResult.error("The user rejected this change. The file was NOT modified." + reasonSuffix(d.reason()));
+			ctx.audit().log("EDIT-REJECTED", path);
+			return ToolResult.error("The user rejected this change on " + ctx.name() + ". The file was NOT modified." + reasonSuffix(d.reason()));
 		}
 		if (newFile) {
-			if (ssh.exists(path))
+			if (ctx.ssh().exists(path))
 				return ToolResult.error("The file appeared on the server while waiting for approval; nothing was written.");
 		} else {
-			val now = ssh.readFile(path, cfg.maxFileBytes());
+			val now = ctx.ssh().readFile(path, ctx.config().maxFileBytes());
 			if (!Arrays.equals(now, beforeBytes)) {
 				return ToolResult.error("The file changed on the server while waiting for approval; nothing was written. Re-read it and try again.");
 			}
-			backups.save(path, beforeBytes);
+			ctx.backups().save(path, beforeBytes);
 		}
-		ssh.writeFile(path, newText.getBytes(StandardCharsets.UTF_8));
-		audit.log("EDIT-APPLIED", path);
-		return ToolResult.ok("File written: " + path + " (" + summary + ")");
+		ctx.ssh().writeFile(path, newText.getBytes(StandardCharsets.UTF_8));
+		ctx.audit().log("EDIT-APPLIED", path);
+		return ToolResult.ok("File written on [" + ctx.name() + "]: " + path + " (" + summary + ")");
 	}
 
 	private ToolResult askUser(JsonNode a) throws Exception {
@@ -316,72 +429,60 @@ public final class GatewayTools {
 
 	// ---------- Output review ----------
 
-	private ToolResult deliver(String title, String text, boolean forceReview) throws InterruptedException {
-		val red = store.apply(text);
+	private ToolResult deliver(ServerContext ctx, String title, String text, boolean forceReview) throws InterruptedException {
+		val red = ctx.redactions().apply(text);
 		boolean mustReview = forceReview || !red.warnings().isEmpty();
 		if (!mustReview) return ToolResult.ok(red.text());
 		val warning = red.warnings().isEmpty() ? null : String.join("\n", red.warnings());
-		val d = review.reviewOutput(new OutputRequest(title, text, red.text(), red.count(), warning));
+		val d = review.reviewOutput(new OutputRequest(ctx.name(), title, text, red.text(), red.count(), warning, ctx.redactions()));
 		if (!d.send()) {
-			audit.log("OUTPUT-WITHHELD", title);
-			return ToolResult.error("The user withheld this output." + reasonSuffix(d.reason()));
+			ctx.audit().log("OUTPUT-WITHHELD", title);
+			return ToolResult.error("The user withheld this output on " + ctx.name() + "." + reasonSuffix(d.reason()));
 		}
-		audit.log("OUTPUT-SENT", title);
+		ctx.audit().log("OUTPUT-SENT", title);
 		return ToolResult.ok(d.text());
 	}
 
 	// ---------- Helper functions ----------
 
-	private boolean isDenied(String path) {
-		if (policy.isDenied(path)) return true;
-		try {
-			return policy.isDenied(ssh.canonicalize(path)); // Resolve symlinks
-		} catch (IOException e) {
-			return false; // e.g. file does not exist (yet)
-		}
-	}
-
 	private static String resolvePath(String p) {
-		p = p.strip();
-		if (p.equals("~")) return ".";
-		if (p.startsWith("~/")) return p.substring(2);
-		return p.isEmpty() ? "." : p;
+		if (p == null || p.isBlank()) return ".";
+		return p.trim();
 	}
 
-	private static String decodeUtf8(byte[] data) throws CharacterCodingException {
+	private static String decodeUtf8(byte[] b) throws CharacterCodingException {
 		return StandardCharsets.UTF_8.newDecoder()
 				.onMalformedInput(CodingErrorAction.REPORT)
 				.onUnmappableCharacter(CodingErrorAction.REPORT)
-				.decode(ByteBuffer.wrap(data)).toString();
+				.decode(ByteBuffer.wrap(b))
+				.toString();
 	}
 
-	private static int countOccurrences(String text, String needle) {
-		int count = 0, i = 0;
-		while ((i = text.indexOf(needle, i)) >= 0) {
+	private static int countOccurrences(String text, String sub) {
+		int count = 0, idx = 0;
+		while ((idx = text.indexOf(sub, idx)) != -1) {
 			count++;
-			i += needle.length();
+			idx += sub.length();
 		}
 		return count;
 	}
 
 	private static String reasonSuffix(String reason) {
-		return reason == null || reason.isBlank() ? "" : " Reason given by the user: " + reason.strip();
+		return (reason == null || reason.isBlank()) ? "" : " (Reason: " + reason + ")";
 	}
 
 	private static String shorten(String s) {
-		String one = s.replace('\n', ' ');
-		return one.length() > 80 ? one.substring(0, 77) + "..." : one;
+		String one = s.replaceAll("\\s+", " ").trim();
+		return one.length() > 60 ? one.substring(0, 57) + "..." : one;
 	}
 
-	private static String requireString(JsonNode a, String key) {
-		JsonNode n = a.get(key);
-		if (n == null || !n.isTextual()) throw new IllegalArgumentException("Missing or invalid argument: " + key);
-		return n.asText();
+	private static String requireString(JsonNode a, String field) {
+		if (a == null || !a.hasNonNull(field)) throw new IllegalArgumentException("Parameter '" + field + "' is required.");
+		return a.get(field).asText();
 	}
 
-	private static String optString(JsonNode a, String key) {
-		JsonNode n = a.get(key);
-		return n != null && n.isTextual() ? n.asText() : null;
+	private static String optString(JsonNode a, String field) {
+		return a != null && a.hasNonNull(field) ? a.get(field).asText() : null;
 	}
 
 	private record Prop(String name, String type, String description, boolean required) {
@@ -402,7 +503,6 @@ public final class GatewayTools {
 			n.put("description", p.description());
 			if (p.required()) required.add(p.name());
 		}
-		if (required.isEmpty()) root.remove("required");
 		return root;
 	}
 }

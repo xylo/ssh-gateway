@@ -3,12 +3,14 @@ package de.sshgateway.mcp;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import de.sshgateway.config.GatewayConfig;
+import de.sshgateway.config.ServerConfig;
 import de.sshgateway.redaction.RedactionStore;
 import de.sshgateway.review.ReviewService;
 import de.sshgateway.security.AuditLog;
 import de.sshgateway.security.Backups;
 import de.sshgateway.security.PathPolicy;
 import de.sshgateway.security.RiskAnalyzer;
+import de.sshgateway.server.ServerContext;
 import de.sshgateway.ssh.ExecResult;
 import de.sshgateway.ssh.SshConnection;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class GatewayToolsSudoTest {
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
+	private ServerConfig serverCfg;
 	private GatewayConfig cfg;
 	private TestSshConnection ssh;
 	private TestReviewService review;
@@ -38,7 +42,7 @@ class GatewayToolsSudoTest {
 		int sudoValidateExitCode = 1; // Default: sudo -n -v fails (not unlocked)
 		int sudoAuthExitCode = 0;     // Default: sudo -S -p '' -v succeeds
 
-		TestSshConnection(GatewayConfig cfg) {
+		TestSshConnection(ServerConfig cfg) {
 			super(cfg);
 		}
 
@@ -83,7 +87,7 @@ class GatewayToolsSudoTest {
 		}
 
 		@Override
-		public String askPassword(String prompt, String errorMessage) {
+		public String askPassword(String server, String prompt, String errorMessage) {
 			askPasswordCalls.incrementAndGet();
 			passwordPrompts.add(prompt);
 			passwordErrors.add(errorMessage);
@@ -99,21 +103,28 @@ class GatewayToolsSudoTest {
 		File redactionFile = new File(tempDir, "redactions.json");
 		File backupsDir = new File(tempDir, "backups");
 
-		cfg = new GatewayConfig(
-				"test.example.com", 22, "testuser", null, null,
-				List.of(), List.of(), List.of(), "idea",
-				30, 100_000, 100_000, 51823
+		serverCfg = new ServerConfig(
+				"testserver", "test.example.com", 22, "testuser", null, null,
+				List.of(), List.of(), List.of(),
+				30, 100_000, 100_000
 		);
 
-		ssh = new TestSshConnection(cfg);
+		cfg = new GatewayConfig(
+				Map.of("testserver", serverCfg), "testserver", "idea",
+				30, 100_000, 100_000, 51823,
+				List.of(), List.of(), List.of()
+		);
+
+		ssh = new TestSshConnection(serverCfg);
 		review = new TestReviewService();
 		AuditLog audit = new AuditLog(auditFile.toPath());
 		RedactionStore store = new RedactionStore(redactionFile.toPath());
-		PathPolicy policy = new PathPolicy(cfg.denyPaths());
-		RiskAnalyzer risk = new RiskAnalyzer(cfg.extraRiskPatterns(), cfg.denyPaths());
+		PathPolicy policy = new PathPolicy(serverCfg.denyPaths());
+		RiskAnalyzer risk = new RiskAnalyzer(serverCfg.extraRiskPatterns(), policy.literalHints());
 		Backups backups = new Backups(backupsDir.toPath());
 
-		tools = new GatewayTools(cfg, ssh, store, review, policy, risk, backups, audit);
+		ServerContext ctx = new ServerContext("testserver", serverCfg, ssh, store, policy, risk, backups, audit, List.of());
+		tools = new GatewayTools(Map.of("testserver", ctx), "testserver", review);
 	}
 
 	private ToolResult callRunCommand(GatewayTools gTools, String command) throws Exception {
@@ -171,7 +182,7 @@ class GatewayToolsSudoTest {
 		review.askPasswordCalls.set(0);
 
 		// First password attempt fails, second succeeds
-		TestSshConnection retrySsh = new TestSshConnection(cfg) {
+		TestSshConnection retrySsh = new TestSshConnection(serverCfg) {
 			int authCount = 0;
 			@Override
 			public ExecResult exec(String command, int timeoutSeconds, byte[] stdin) {
@@ -192,10 +203,11 @@ class GatewayToolsSudoTest {
 		tempDir.deleteOnExit();
 		AuditLog audit = new AuditLog(new File(tempDir, "audit.log").toPath());
 		RedactionStore store = new RedactionStore(new File(tempDir, "redactions.json").toPath());
-		PathPolicy policy = new PathPolicy(cfg.denyPaths());
-		RiskAnalyzer risk = new RiskAnalyzer(cfg.extraRiskPatterns(), cfg.denyPaths());
+		PathPolicy policy = new PathPolicy(serverCfg.denyPaths());
+		RiskAnalyzer risk = new RiskAnalyzer(serverCfg.extraRiskPatterns(), policy.literalHints());
 		Backups backups = new Backups(new File(tempDir, "backups").toPath());
-		GatewayTools toolsWithRetry = new GatewayTools(cfg, retrySsh, store, review, policy, risk, backups, audit);
+		ServerContext retryCtx = new ServerContext("testserver", serverCfg, retrySsh, store, policy, risk, backups, audit, List.of());
+		GatewayTools toolsWithRetry = new GatewayTools(Map.of("testserver", retryCtx), "testserver", review);
 
 		ToolResult res = callRunCommand(toolsWithRetry, "sudo reboot");
 

@@ -1,9 +1,10 @@
 # SSH Gateway (MCP) for Claude Code / Claude Desktop
 
-A local gateway that lets Claude manage a server – **you sit in the middle**:
+A local gateway that lets Claude manage one or multiple remote servers – **you sit in the middle**:
 
+- **multi-server support**: connect multiple remote servers through a single gateway instance; tools accept an optional/required `server` parameter, and `list_servers` lists all available servers
 - every command is shown to you first: **Run**, **Run and hold output** (output is withheld until you review it) or **Reject** (with a reason sent back to Claude)
-- output and file contents open in an editor with **Replace** (live highlighting of every match, optionally RegEx), **Always replace** (saves the rule and applies it automatically from then on), **Search** (Ctrl+F, F3) and free-form editing
+- output and file contents open in an editor with **Replace** (live highlighting of every match, optionally RegEx), **Always replace** (saves the rule server-specifically and applies it automatically from then on), **Search** (Ctrl+F, F3) and free-form editing
 - file changes (`edit_file`, `write_file`) open `idea diff` plus an **Accept / Reject** dialog (with a text diff as a fallback)
 - **sudo password prompt**: when a command uses `sudo`, the gateway checks authentication (`sudo -n -v`) and prompts you for the password if needed – your password is never exposed to Claude
 - follow-up questions: Claude can ask in chat or via the `ask_user` tool (dialog)
@@ -20,13 +21,13 @@ error. That's why the gateway runs as **two processes**:
 |---|---|---|
 | Started by | **you**, e.g. double-click or shortcut | Claude Desktop, via `claude_desktop_config.json` |
 | Command | `java -jar ssh-gateway.jar` | `java -jar ssh-gateway.jar --bridge` |
-| Contains | JavaFX, SSH connection, all approval dialogs | only stdio ↔ local socket byte forwarding |
+| Contains | JavaFX, SSH connections, all approval dialogs | only stdio ↔ local socket byte forwarding |
 | Runs in | your normal desktop session → dialogs appear | anywhere, doesn't need desktop access |
 
 The UI application listens on `127.0.0.1:<bridgePort>` (default `51823`) and, on startup, writes a random token to
 `~/.ssh-gateway/bridge.token`. The bridge reads that token, connects, and from then on only forwards bytes – it
 doesn't understand MCP itself. Benefit: if you restart Claude Desktop, a new bridge simply reconnects; the UI
-application (and the SSH connection) doesn't need to be restarted for that.
+application (and the SSH connections) doesn't need to be restarted for that.
 
 **Important:** the UI application must be running *before* you use it from Claude, and must keep running for the
 whole session.
@@ -43,7 +44,7 @@ The jar contains the JavaFX natives of the build OS – build it on the machine 
 ```
 java -jar target/ssh-gateway.jar
 ```
-Expected output: `ssh-gateway UI bereit für ... / Wartet auf Brücken-Verbindungen auf 127.0.0.1:51823 ...`
+Expected output: `ssh-gateway UI ready for ... / Waiting for bridge connections on 127.0.0.1:51823 ...`
 
 **2. Connect Claude Desktop** – see below.
 
@@ -51,23 +52,56 @@ Expected output: `ssh-gateway UI bereit für ... / Wartet auf Brücken-Verbindun
 
 `~/.ssh-gateway/config.json` (alternative location: environment variable `SSHGW_HOME`), template: `config.example.json`.
 
-| Field | Meaning |
-|---|---|
-| `host`, `port`, `user` | target (required: host, user) |
-| `keyFile` | private key; if omitted: default key under `~/.ssh` |
-| `knownHostsFile` | default: `~/.ssh/known_hosts` (host must already be listed there → connect once via `ssh` first) |
-| `ideaCommand` | default `idea`; on Windows e.g. `idea64.exe`/`idea.bat`; empty = disabled |
-| `denyPaths` | replaces the default deny list (`.env`, `*.pem`, `.ssh/**`, `/etc/shadow` …) |
-| `extraRiskPatterns` | additional regexes that flag commands as suspicious in the dialog |
-| `blockedCommandPatterns` | regexes; matching commands are rejected without a dialog |
-| `defaultTimeoutSeconds`, `maxOutputBytes`, `maxFileBytes` | limits (120 s / 1 MB / 512 KB) |
-| `bridgePort` | local port between UI and bridge (default `51823`, `127.0.0.1` only) |
+```json
+{
+  "servers": {
+    "web": {
+      "host": "web.example.org",
+      "port": 22,
+      "user": "claude-ops",
+      "keyFile": "/home/you/.ssh/id_ed25519_gateway"
+    },
+    "db": {
+      "host": "db.example.org",
+      "port": 22,
+      "user": "db-admin",
+      "keyFile": "/home/you/.ssh/id_ed25519_gateway"
+    }
+  },
+  "defaultServer": "web",
+  "ideaCommand": "idea",
+  "defaultTimeoutSeconds": 120,
+  "bridgePort": 51823
+}
+```
 
-Passwords don't belong in this file: use the `SSHGW_PASSWORD` or `SSHGW_KEY_PASSPHRASE` environment variables instead.
+### Global & Server-Specific Settings
 
-Other files under `~/.ssh-gateway/`: `redactions.json` (replacement rules), `audit.log` (actions and decisions,
-without output content), `backups/` (originals saved before every file change), `bridge.token` (the bridge's access
-token – don't share it).
+| Field | Scope | Meaning |
+|---|---|---|
+| `servers` | Global | Map of server identifier to server configuration (or list of server objects with `name`) |
+| `defaultServer` | Global | Default server name used when the `server` argument is omitted in tool calls |
+| `host`, `port`, `user` | Per Server | Target SSH connection (required: `host`, `user`; default port: `22`) |
+| `keyFile` | Per Server | Private key file; if omitted: default key under `~/.ssh` |
+| `knownHostsFile` | Per Server / Global | Default: `~/.ssh/known_hosts` (host must already be listed there → connect once via `ssh` first) |
+| `ideaCommand` | Global | Default `idea`; on Windows e.g. `idea64.exe`/`idea.bat`; empty = disabled |
+| `denyPaths` | Per Server / Global | Replaces default deny list (`.env`, `*.pem`, `.ssh/**`, `/etc/shadow` …) |
+| `extraRiskPatterns` | Per Server / Global | Additional regexes that flag commands as suspicious in the dialog |
+| `blockedCommandPatterns` | Per Server / Global | Regexes; matching commands are rejected without a dialog |
+| `defaultTimeoutSeconds`, `maxOutputBytes`, `maxFileBytes` | Per Server / Global | Limits (default: 120 s / 1 MB / 512 KB) |
+| `bridgePort` | Global | Local port between UI and bridge (default `51823`, `127.0.0.1` only) |
+
+Passwords don't belong in `config.json`:
+- Use `SSHGW_PASSWORD` or `SSHGW_PASSWORD_<SERVERNAME>` (e.g. `SSHGW_PASSWORD_DB`)
+- Use `SSHGW_KEY_PASSPHRASE` or `SSHGW_KEY_PASSPHRASE_<SERVERNAME>` (e.g. `SSHGW_KEY_PASSPHRASE_WEB`)
+
+### Server Data Isolation
+
+Files and state are cleanly isolated per server under `~/.ssh-gateway/<SERVERNAME>/`:
+- `~/.ssh-gateway/<SERVERNAME>/redactions.json` – server-specific replacement rules saved with "Always replace"
+- `~/.ssh-gateway/<SERVERNAME>/audit.log` – log of actions and decisions on that server
+- `~/.ssh-gateway/<SERVERNAME>/backups/` – backup copies of files before changes are applied on that server
+- `~/.ssh-gateway/bridge.token` – local bridge authentication token (gateway-wide)
 
 ## Connecting Claude Desktop
 

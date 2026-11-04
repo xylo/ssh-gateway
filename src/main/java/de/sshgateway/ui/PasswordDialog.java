@@ -20,8 +20,8 @@ final class PasswordDialog {
 	/**
 	 * Result: entered password or null if cancelled.
 	 */
-	static Stage create(String prompt, String errorMessage, CompletableFuture<String> future) {
-		val head = new Label("Sudo Authentication Required");
+	static Stage create(String server, String prompt, String errorMessage, CompletableFuture<String> future) {
+		val head = new Label("Sudo Authentication Required [" + server + "]");
 		head.getStyleClass().add("heading");
 		val p = new Label(prompt);
 		p.setWrapText(true);
@@ -54,6 +54,6 @@ final class PasswordDialog {
 
 		Platform.runLater(passwordField::requestFocus);
 
-		return FxUtil.stage("SSH-Gateway – Sudo Password", root, 480, errorMessage != null ? 220 : 180);
+		return FxUtil.stage("SSH-Gateway [" + server + "] – Sudo Password", root, 480, errorMessage != null ? 220 : 180);
 	}
 }

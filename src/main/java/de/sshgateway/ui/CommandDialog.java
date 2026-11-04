@@ -23,7 +23,7 @@ final class CommandDialog {
 	}
 
 	static Stage create(CommandRequest req, CompletableFuture<CommandDecision> future) {
-		val head = new Label("Claude wants to run a command on the server");
+		val head = new Label("Claude wants to run a command on [" + req.server() + "]");
 		head.getStyleClass().add("heading");
 		val root = new VBox(10, head);
 		root.setPadding(new Insets(12));
@@ -64,6 +64,6 @@ final class CommandDialog {
 		buttons.setAlignment(Pos.CENTER_RIGHT);
 		root.getChildren().addAll(cmd, reason, hint, buttons);
 
-		return FxUtil.stage("SSH-Gateway – Approve command", root, 720, 420);
+		return FxUtil.stage("SSH-Gateway [" + req.server() + "] – Approve command", root, 720, 420);
 	}
 }

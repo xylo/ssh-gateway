@@ -1,6 +1,7 @@
 package de.sshgateway.ssh;
 
 import de.sshgateway.config.GatewayConfig;
+import de.sshgateway.config.ServerConfig;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.connection.ConnectionException;
 import net.schmizz.sshj.connection.channel.direct.Session;
@@ -41,12 +42,16 @@ public class SshConnection implements AutoCloseable {
 		static final Captured EMPTY = new Captured(new byte[0], false);
 	}
 
-	private final GatewayConfig cfg;
+	private final ServerConfig cfg;
 	private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 	private SSHClient client;
 
-	public SshConnection(GatewayConfig cfg) {
+	public SshConnection(ServerConfig cfg) {
 		this.cfg = cfg;
+	}
+
+	public ServerConfig config() {
+		return cfg;
 	}
 
 	private synchronized SSHClient client() throws IOException {
@@ -78,8 +83,12 @@ public class SshConnection implements AutoCloseable {
 	}
 
 	private void authenticate(SSHClient c) throws IOException {
-		String passphrase = System.getenv("SSHGW_KEY_PASSPHRASE");
-		String password = System.getenv("SSHGW_PASSWORD");
+		String serverSuffix = cfg.name() != null ? "_" + cfg.name().toUpperCase().replaceAll("[^A-Z0-9]", "_") : "";
+		String passphrase = System.getenv("SSHGW_KEY_PASSPHRASE" + serverSuffix);
+		if (passphrase == null) passphrase = System.getenv("SSHGW_KEY_PASSPHRASE");
+		String password = System.getenv("SSHGW_PASSWORD" + serverSuffix);
+		if (password == null) password = System.getenv("SSHGW_PASSWORD");
+
 		if (cfg.keyFile() != null && !cfg.keyFile().isBlank()) {
 			KeyProvider kp = passphrase != null ? c.loadKeys(cfg.keyFile(), passphrase) : c.loadKeys(cfg.keyFile());
 			c.authPublickey(cfg.user(), kp);

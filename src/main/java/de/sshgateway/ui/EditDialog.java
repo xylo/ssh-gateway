@@ -23,9 +23,10 @@ final class EditDialog {
 
 	static Stage create(EditRequest req, String unifiedDiff, String ideaStatus, Runnable reopenIdea,
 											CompletableFuture<EditDecision> future) {
-		val head = new Label(req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file");
+		val actionText = req.newFile() ? "Claude wants to create a new file" : "Claude wants to change a file";
+		val head = new Label(actionText + " on [" + req.server() + "]");
 		head.getStyleClass().add("heading");
-		val path = new Label(req.path());
+		val path = new Label("[" + req.server() + "] " + req.path());
 		path.getStyleClass().add("mono");
 		val status = new Label(ideaStatus);
 		status.setWrapText(true);
@@ -53,6 +54,6 @@ final class EditDialog {
 
 		val root = new VBox(8, head, path, status, diff, reason, buttons);
 		root.setPadding(new Insets(12));
-		return FxUtil.stage("SSH-Gateway – Approve File Change", root, 900, 620);
+		return FxUtil.stage("SSH-Gateway [" + req.server() + "] – Approve File Change", root, 900, 620);
 	}
 }

@@ -85,7 +85,7 @@ final class OutputReviewDialog {
 	}
 
 	private Stage build() {
-		val title = new Label(req.title());
+		val title = new Label("[" + req.server() + "] " + req.title());
 		title.getStyleClass().add("heading");
 		val info = new Label(req.autoReplacements() > 0
 				? req.autoReplacements() + " replacement(s) were automatically applied by stored rules."
@@ -157,7 +157,7 @@ final class OutputReviewDialog {
 		root.setPadding(new Insets(10));
 		top.setSpacing(6);
 
-		stage = FxUtil.stage("SSH-Gateway – Review Output", root, 1000, 720);
+		stage = FxUtil.stage("SSH-Gateway [" + req.server() + "] – Review Output", root, 1000, 720);
 
 		// Live update (debounced)
 		debounce.setOnFinished(e -> refresh());

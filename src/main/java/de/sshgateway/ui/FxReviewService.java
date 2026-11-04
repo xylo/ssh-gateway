@@ -21,12 +21,10 @@ import lombok.val;
  * JavaFX implementation. Dialogs are shown sequentially (not simultaneously).
  */
 public final class FxReviewService implements ReviewService {
-	private final RedactionStore store;
 	private final String ideaCommand;
 	private final ReentrantLock lock = new ReentrantLock(true);
 
-	public FxReviewService(RedactionStore store, String ideaCommand) {
-		this.store = store;
+	public FxReviewService(String ideaCommand) {
 		this.ideaCommand = ideaCommand;
 	}
 
@@ -46,7 +44,7 @@ public final class FxReviewService implements ReviewService {
 		lock.lockInterruptibly();
 		try {
 			return FxUtil.ask(new OutputDecision(false, null, "Dialog closed without decision."),
-					f -> OutputReviewDialog.create(req, store, f));
+					f -> OutputReviewDialog.create(req, req.store(), f));
 		} finally {
 			lock.unlock();
 		}
@@ -89,10 +87,10 @@ public final class FxReviewService implements ReviewService {
 	}
 
 	@Override
-	public String askPassword(String prompt, String errorMessage) throws InterruptedException {
+	public String askPassword(String server, String prompt, String errorMessage) throws InterruptedException {
 		lock.lockInterruptibly();
 		try {
-			return FxUtil.ask(null, f -> PasswordDialog.create(prompt, errorMessage, f));
+			return FxUtil.ask(null, f -> PasswordDialog.create(server, prompt, errorMessage, f));
 		} finally {
 			lock.unlock();
 		}
