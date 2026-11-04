@@ -5,6 +5,7 @@ A local gateway that lets Claude manage a server – **you sit in the middle**:
 - every command is shown to you first: **Run**, **Run and hold output** (output is withheld until you review it) or **Reject** (with a reason sent back to Claude)
 - output and file contents open in an editor with **Replace** (live highlighting of every match, optionally RegEx), **Always replace** (saves the rule and applies it automatically from then on), **Search** (Ctrl+F, F3) and free-form editing
 - file changes (`edit_file`, `write_file`) open `idea diff` plus an **Accept / Reject** dialog (with a text diff as a fallback)
+- **sudo password prompt**: when a command uses `sudo`, the gateway checks authentication (`sudo -n -v`) and prompts you for the password if needed – your password is never exposed to Claude
 - follow-up questions: Claude can ask in chat or via the `ask_user` tool (dialog)
 
 Java 25, Maven, JavaFX + RichTextFX, sshj.
@@ -115,6 +116,12 @@ value against the current Claude Code docs.
 
 ## Behavior in detail
 
+- **Sudo commands**: When Claude executes a command containing `sudo`, the gateway first checks whether sudo is 
+  already unlocked (`sudo -n -v`). If not, a secure password dialog appears in the UI and unlocks sudo
+  (`sudo -S -p '' -v`). The password is sent directly to the server's SSH session and is never exposed to Claude.
+  *Tip:* To avoid entering the password for every command, configure a cache timeout in `/etc/sudoers`
+  (e.g. `Defaults:youruser timestamp_timeout=120, timestamp_type=global`). `timestamp_type=global` (or `kernel`)
+  is recommended because non-interactive SSH exec sessions do not share a TTY.
 - **Run** still applies the saved rules to the output. If a rule can't be evaluated (invalid regex/timeout), the
   review dialog opens automatically.
 - `read_file` and `list_dir` always go through the review dialog.
